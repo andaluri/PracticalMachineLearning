@@ -1,0 +1,117 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Sambasiva Andaluri"
+date: "September 20, 2015"
+output: html_document
+---
+
+# Predicting manner of exercise
+
+## Introduction
+
+Personal activity data of an activity from various devices such as JawBone Up, FitBit and FuelBand was collected for several users. This data is now being used for making prediction of the activity based on the numeric data. In this report we will build a machine learning model to make predictions of activity performed using the data. We will explore multiple models and select a model with highest accuracy as the final model. 
+
+## Load libraries
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+library(dplyr)
+library(rpart)
+```
+
+## Gather data
+Download the data once to save time and bandwidth of downloading each time.
+```{r, cache=TRUE}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="pml-training.csv", method="curl", quiet=TRUE)
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="pml-testing.csv", method="curl", quiet=TRUE)
+```
+
+## Data Cleaning
+Taking a cursory look at the data using str command, it looks like many columns have a lot of values as NA, #DIV/0! or empty values. While reading data, these values are registered as NA for easy removal. 
+```{r, message=FALSE}
+pmlTrainRaw <- read.csv("pml-training.csv", na.strings = c("NA","#DIV/0!", ""))
+pmlTestRaw <- read.csv("pml-testing.csv", na.strings = c("NA","#DIV/0!", ""))
+```
+
+Many of the columns have a lot of NAs. Some columns have all NAs or have a significant number (>97%) values are NA. These columns will be removed to make tidier data set. We would need to save rmNA to remove the same columns from test data set as well.
+```{r, message=FALSE, results='hide'}
+as.data.frame(sapply(pmlTrainRaw, function(x) mean(is.na(x))))
+rmNA <- sapply(pmlTrainRaw, function(x) mean(is.na(x))) > 0.97
+pmlTrainFilt <- pmlTrainRaw[,rmNA==FALSE]
+pmlTestFilt <- pmlTestRaw[,rmNA==FALSE]
+```
+
+We now have 60 variables after initial cleaning. Out of which the first 7 columns does not seem to be of value: X (id), user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window. We will remove these columns, and now we should have 53 variables.
+```{r, message=FALSE, results='hide'}
+pmlTrainClean <- select(pmlTrainFilt, roll_belt:classe)
+pmlTestClean <- select(pmlTestFilt, roll_belt:problem_id)
+```
+
+In the interest of finding a parsimonious model, we should remove redundant features by finding and removing highly correlated variables with a correlation of .75 or more. This should leave us with 32 variables. 
+```{r, message=FALSE, results='hide'}
+corTrain <- cor(pmlTrainClean[1:52])
+highCorCols <- findCorrelation(corTrain, cutoff = .75)
+pmlTrainFinal <- pmlTrainClean[,-highCorCols]
+pmlTestFinal <- pmlTestClean[,-highCorCols]
+```
+
+We should now test the data for Near Zero Variance and remove any near zero covariates. Output shows there is no NearZeroVariance variables, though many variables have very low percentUnique.
+```{r, message=FALSE}
+nearZeroVar(pmlTrainFinal, saveMetrics=TRUE)
+```
+
+## Data Slicing
+
+Though we were given a train and test data sets, we should still split the training data set for testing and evaluating various models before we test our models on the backup test set.
+```{r}
+pmlInTrain <- createDataPartition(y=pmlTrainFinal$classe,p=0.75, list=FALSE)
+pmlTrain <- pmlTrainFinal[pmlInTrain,]
+pmlTest <- pmlTrainFinal[-pmlInTrain,]
+```
+
+## Build Models
+
+We will try 2 models, first a Classification Tree algorithm and then Random Forest algorithm each with a preProces option to center and scale data.
+
+### Classification Tree
+First lets start with a simple classification tree as we need to use numeric data to predict a factor outcome. However the accuracy of the model is about 0.53 which is no different from a coin toss. So we should discard this model and try Random Forest model.
+```{r,message=FALSE}
+fitCT <- train(pmlTrain$classe ~ ., preProcess=c("center", "scale"), data=pmlTrain, method="rpart")
+predCT <- predict(fitCT, newdata=pmlTest)
+cmCT <- confusionMatrix(predCT, pmlTest$classe)
+cmCT$overall['Accuracy']
+```
+
+### Random Forest
+Since our earlier model did not yield acceptable result, we will try the Random Forest model with 4 fold Cross validation as tuning parameter. With RF model, the accuracy increased to 0.99. This is acceptable for making further predictions on the test data provided for assignment.
+```{r,message=FALSE}
+fitRF <- train(pmlTrain$classe ~ ., preProcess=c("center", "scale"), data=pmlTrain, method="rf", trControl=trainControl(method = "cv", number = 4))
+predRF <- predict(fitRF, newdata=pmlTest)
+cmRF <- confusionMatrix(predRF, pmlTest$classe)
+cmRF$overall['Accuracy']
+```
+
+## Sample Errors
+The in sample error rate for Random Forest was 0.01. Out of sample error is `r 1 - (sum(predRF == pmlTest$classe) / length(predRF))`
+
+## Conclusion
+In conclusion after evaluating two models we found that the random forest model yields the most accurate predictions. Using this model, we were able to predict the activity from the given data with an error rate of 1%. In sample and out of sample error rates are pretty much same, as such there is no indication of overfitting.
+
+## Predict held test data (for submission)
+```{r}
+answers = predict(fitRF, newdata=pmlTestFinal)
+print(answers)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
+
+
+
+
+
+
